@@ -1,3 +1,4 @@
+#include <ctype.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -26,6 +27,50 @@ char * loadFile(const char *fn, int &len)
 unsigned short* outbuf = 0;
 int outbuf_idx = 0;
 int debug = 0;
+
+char rfc3986[256] = { 0 };
+char html5[256] = { 0 };
+
+void url_encoder_rfc_tables_init() {
+
+	int i;
+
+	for (i = 0; i < 256; i++) {
+
+		rfc3986[i] = isalnum(i) || i == '~' || i == '-' || i == '.' || i == '_' ? i : 0;
+		html5[i] = isalnum(i) || i == '*' || i == '-' || i == '.' || i == '_' ? i : (i == ' ') ? '+' : 0;
+	}
+}
+
+void url_encode_print(char *table, unsigned char *s) 
+{
+	for (; *s; s++) {
+
+		if (table[*s]) printf("%c", table[*s]);
+		else printf("%%%02X", *s);
+	}
+}
+
+void printPascalString_html(char* s)
+{
+	int len = *(unsigned char*)s;
+	s++;
+	while (len)
+	{
+		if (*s == '<')
+			printf("&lt;");
+		else if (*s == '>')
+			printf("&gt;");
+		else if (*s == '&')
+			printf("&amp;");
+		else if (*s >= 32 && *s <= 126)
+			printf("%c", *s);
+		else
+			printf("?");
+		s++;
+		len--;
+	}
+}
 
 void printPascalString(char* s)
 {
@@ -134,8 +179,12 @@ public:
 		int i = 0;
 		while (i < 20 && fn[i])
 		{
-			chopfn[i] = fn[i];
-			i++;
+			// just discard illegal characters..
+			if (fn[i] > 32 && fn[i] < 126 && fn[i] != '<' && fn[i] != '>' && fn[i] != '&')
+			{
+				chopfn[i] = fn[i];
+				i++;
+			}
 		}
 		if (i == 20)
 		{
@@ -147,11 +196,12 @@ public:
 
 		printf(
 			"      <tr>\n"
-			"        <td><a href=\"%s\">%s</a></td>\n"
+			"        <td><a href=\"");
+		url_encode_print(html5, (unsigned char*)fn);
+		printf("\">%s</a></td>\n"
 			"        <td>%s</td>\n"
 			"        <td>%s</td>\n"
 			"        <td>%s</td>\n",
-			fn, 
 			chopfn,
 			songtype(),
 			emuspeed == 50? "Yes" : "No",
@@ -166,15 +216,15 @@ public:
 		printf("</td>\n");
 		printf("        <td>");
 		char* stringptr = (char*)data + 28;
-		printPascalString(stringptr);
+		printPascalString_html(stringptr);
 		printf("</td>\n");
 		printf("        <td>");
 		stringptr += *(unsigned char*)stringptr + 1;
-		printPascalString(stringptr);
+		printPascalString_html(stringptr);
 		printf("</td>\n");
 		printf("        <td>");
 		stringptr += *(unsigned char*)stringptr + 1;
-		printPascalString(stringptr);
+		printPascalString_html(stringptr);
 		printf("</td>\n");
 
 		printf("      </tr>\n");
@@ -272,6 +322,7 @@ public:
 int main(int parc, char ** pars)
 {
 	int header = 0, line = 0, footer = 0;
+	url_encoder_rfc_tables_init();
 
 	char* infilename = 0;
 
