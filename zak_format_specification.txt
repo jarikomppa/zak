@@ -1,0 +1,256 @@
+ZAK format spec
+Jari Komppa, http://iki.fi/sol/
+Version: 02052020 (ddmmyyyy)
+
+
+Preface
+-------
+
+The ZAK format is a generic register dump-based music file format for various
+audio chips, including AY/YM chips found in Sinclair ZX Spectrum 128 (and later
+models) and Atari ST models, SID chips in Commodore 64 (and later models), 
+TED in Commodore Plus/4 and AdLib/SoundBlaster FM chips.
+
+The goal is to be more convenient and efficient than the various other register
+dump-based formats. The same format is meant to be useful not only on desktop
+and emulation environments, but on the actual devices themselves.
+
+Since register dumps tend to be large, the actual register dump data is 
+compressed. For compression, the ZX7 algorithm was chosen for its 8-bit device
+support as well as its fairly good compression ratio.
+
+The register dumps are written as register write and delay opcodes to avoid
+storing unneccessary register writes. The header also contains clock rates for
+emulation and optimization purposes. Small devices are not expected to do
+clock rate conversions on the fly; this can be done on desktop before transferring
+the data to the small device.
+
+
+File naming
+-----------
+
+All ZAK files should have the suffix ".zak". Since the zak format can contain
+data for all sorts of audio chips, it may be useful to include the chip format
+in the filename. (The actual data format can be found inside the file, but that's
+not human-friendly).
+
+Suggestion:
+songname_sid.zak for c64 sid
+songname_ay.zak for ay
+songname_ym.zak for ym
+songname_2ay.zak for turbosound (2x ay)
+songname_3ay.zak for turbosound next (3x ay)
+songname_ted.zak for commodore plus/4 ted
+songname_2sid.zak for dual c64 sid
+songname_adlib.zak for adlib/soundblaster
+
+
+Data type   Description
+----------- ------------------
+Byte        8 bit unsigned value
+Word        16 bit unsigned value
+DWord       32 bit unsigned value
+String      Size byte + text data
+
+Text strings are stored as pascal strings, i.e, size byte followed by number of
+bytes stated by the size byte.
+
+
+Header:
+-------
+
+Offset  Type    Explanation
+------- ------- ---------------
+0       DWord   'CHIP' tag
+4       DWord   'TUNE' tag
+8       Word    Offset to song data from beginning of file, in bytes
+10      Byte    Chip type. 
+                0 = SID
+                1 = AY/YM
+                2 = Turbosound
+                3 = Turbosound next
+                4 = TED                
+                5 = 2xSID
+                6 = TED+2xSID
+                7 = AdLib/SoundBlaster
+11      Byte    Flags
+                1 = Song data is uncompressed
+                2 = YM song contains digidrums
+                4 = Digi-drum data in signed format
+                8 = Digi-drum data in ST 4 bit format
+                SID model: 2 bits
+                (default SID = 6581)
+                16 = 8580 SID
+                32 = 8580DB SID
+                48 = 6581R1 SID
+                AY/YM model: 1 bit
+                64 = YM2149F (if not set, AY-3-8910 assumed)
+12      Word    Number of 1024 byte chunks of song data
+14      Word    Bytes in last chunk of song data
+16      Word    Loop position 1024 byte chunk
+18      Word    Loop position byte offset in 1024 byte chunk
+20      DWord   Emulation CPU speed. For vbl-synced tunes, this is refresh rate (50/60)
+24      DWord   Emulation chip speed. 
+                1000000 for amstrad cpc
+                1774400 for zx spectrum
+                2000000 for atari st
+28      String  Song name
+?       String  Artist name
+?       String  Song note 
+?       ?       Optional data (default: none)
+
+If digidrums:
+n+0     Word    Number of digidrums
+n+2     Word    First sample size
+n+4     Bytes   Sample data (8 bits per sample)
+??      Word    Second sample size
+??+2    Bytes   Sample data
+etc.
+
+Total length of song data is (number of 1024 chunks - 1) * 1024 + bytes in last chunk.
+When compressed, the last chunk is padded with zeroes, so all compressed chunks 
+expand to 1024 bytes.
+
+Loop position is also stored as 1k chunk / byte offset.
+
+
+Note: uncompressed variant
+--------------------------
+
+In order to make writing register dumpers easier, the format also has an uncompressed
+variant. This version is not meant for distribution, however, and the files should
+be run through optimizer to produce the proper versions.
+
+The uncompressed variant has bit 1 in the flags field, and the song data length
+fields are undefined (the actual file length is used to determine dump length).
+
+
+Song data:
+----------
+
+Song data is stored in ZX7 compressed format by Einar Saukas. The decompressors for 
+ZX7 for all platforms are available with very liberal licenses; basically there's a 
+request to mention the use of ZX7, but that is not required.
+
+The decompression can be done in chunks, so only a small amount of song data needs to be
+decompressed at any given time.
+
+Note that the song data length is stored as two 16-bit words: number of 1024 byte 
+chunks and number of bytes in the last chunk. This means that the maximum length of
+a uncompressed register dump can only be about 64 megabytes, but if you're hitting this
+limit, you probably need to split the dump into several files in any case.
+
+The decompressed data is a stream of 16-bit opcodes. 
+
+Opcode      Description
+----------- ---------------------
+Delay       High bit of opcode is on. 
+            Remaining 15 bits tell how many cycles to delay. 
+            Delay of zero cycles is shorthand for 2x 0xffff
+Regwrite    High bit of opcode is off. 
+            High byte is register number (max 127 regs)
+            low byte is the register value.
+
+
+AdLib:
+------
+
+Due to the fact that AdLib has 244 registers(!), and this system only supports 127,
+a more complex encoding format is required there. The encoding of 127 sets the register
+number offset, so for "127 10" "8 12", the second opcode will write "12" to register 
+10+8=18.
+
+
+TED
+---
+
+TED has 5 registers. These are offset by 64 to be able to play both two SIDs and a TED 
+at the same time.
+
+
+SID
+---
+
+SID has 32 registers. For two SID configuration, the second SID registers are offset by 32.
+
+
+AY/YM, Turbosound, Turbosound next
+----------------------------------
+
+The AY/YM chip has 14 registers.
+Turbosound has two AY chips, and Turbosound next has three.
+The second AY chip registers are offset by 16.
+The third AY chip registers are offset by 32.
+
+The last register (r13, if we count from 0) acts as a (re)trigger,
+and thus writes of the same value are allowed and must not be optimized out.
+
+Some YM songs may contain digidrums. These do not exist on
+turbosound or turbosound next songs, as zx spectrum has no timer.
+
+DD refers to digidrums, TS refers to "timer synth".
+TODO: what the heck does TS do, is it just a sawtooth?
+
+Further "virtual" registers exist for digidrums; these are offset by 64:
+0 - TS control:
+    0 - no TS
+    1 - TS on voice A
+    2 - TS on voice B
+    3 - TS on voice C
+1 - TS volume
+2 - TS Timer predivisor
+3 - TS Timer counter
+4 - TS timer reset (reset on write, value ignored)
+5 - DD start offset
+6 - DD sample select
+7 - DD control:
+    0 - No DD
+    1 - DD start on voice A
+    2 - DD start on voice B
+    3 - DD start on voice C
+8 - DD Timer predivisor
+9 - DD Timer counter
+
+Timer speed: 
+((2457600/predivisor)/counter) = Hz
+
+TP      TC      Frequency (Hz)
+------- ------- -----------------
+1       28      (2457600/4)/28   = 21942 Hz
+4       150     (2457600/50)/150 = 327 Hz
+
+
+
+Compression details
+-------------------
+
+Instead of straight-up compressing the whole song data with ZX7, the data is compressed
+in 1024 byte chunks with 1024 prefix. This sacrifices a bit on the compression ratio, but
+saves in the required buffer size: the player only requires 2048 byte buffer for 
+decompression. 
+
+Every time a new chunk is decompressed to the higher half of the buffer, the data from
+the previous chunk must exist in the lower 1024 bytes of the buffer.
+
+The player must keep track of where the next bit of compressed data can be found. Here's
+instructions on how to do this:
+
+In C, it's trivial do modify zx7 decompress() to return input_index.
+
+In Z80, you can obtain in HL the address of the next compressed block, as follows:
+
+    call dzx7_standard
+    jr nz,skip
+    dec hl
+skip:
+    ...
+
+or
+
+    call dzx7_turbo
+    dec hl
+
+or
+
+    call dzx7_mega
+    
