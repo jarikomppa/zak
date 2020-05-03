@@ -7,8 +7,8 @@ by Jari Komppa, 2020
 This repository contains the file format specification and various tools for converting
 existing file formats to the zak format.
 
-SoLoud audio engine can play zak file formats: github.com/jarikomppa/soloud
+SoLoud audio engine can play zak file formats: https://github.com/jarikomppa/soloud
 
-Player for 50Hz ay/ym formats exists for the zx spectrum next: github.com/jarikomppa/specnext
+Player for 50Hz ay/ym formats exists for the zx spectrum next: https://github.com/jarikomppa/specnext
 
 Everything is released under the Unlicense unless otherwise stated in the source code.
