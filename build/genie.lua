@@ -70,9 +70,18 @@ project "zakopt"
 	kind "ConsoleApp"
 	language "C++"
 	files {
-	  "../src/tools/zakopt/*.c*"
+	  "../zakopt/*.c*"
 	}
 	targetname "zakopt"
 
 -- 8< -- 8< -- 8< -- 8< -- 8< -- 8< -- 8< -- 8< -- 8< -- 8< --
     
+project "zakinfo"
+	kind "ConsoleApp"
+	language "C++"
+	files {
+	  "../zakinfo/*.c*"
+	}
+	targetname "zakinfo"
+
+-- 8< -- 8< -- 8< -- 8< -- 8< -- 8< -- 8< -- 8< -- 8< -- 8< --
