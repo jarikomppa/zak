@@ -127,7 +127,7 @@ public:
 			"      <tr>\n"
 			"        <th>File</th>\n"
 			"        <th>Type</th>\n"
-			"        <th>50Hz</th>\n"
+			"        <th>Hz</th>\n"
 			"        <th>Chip model</th>"
 			"        <th>Flags</th>"
 			"        <th>Song name</th>\n"
@@ -200,11 +200,11 @@ public:
 		url_encode_print(html5, (unsigned char*)fn);
 		printf("\">%s</a></td>\n"
 			"        <td>%s</td>\n"
-			"        <td>%s</td>\n"
+			"        <td>%d</td>\n"
 			"        <td>%s</td>\n",
 			chopfn,
 			songtype(),
-			emuspeed == 50? "Yes" : "No",
+			emuspeed,
 			chipmodel()
 			);
 
