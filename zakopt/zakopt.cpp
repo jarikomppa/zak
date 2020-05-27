@@ -110,9 +110,7 @@ public:
     int origlen;
     int frame_freq;
     unsigned int frame_bins;
-    int frame_bin_groups;
     int frame_count;
-    int frame_triggers;
     int loop_time;    
 
     Zak() { header = 0; data = 0; orig_compressed = 0; wide = 0; changed = 0; }
@@ -460,37 +458,50 @@ public:
         // picking the frequency which uses least bins.
         int best = 45;
         int best_bins = 21;
-        for (int freq = 45; freq < 75; freq++)
+        int step = 100;
+
+        do
         {
-            // skip first 10% of regwrites
-            unsigned int bins = 0;
-            for (int i = regwrites / 10; i < regwrites; i++)
+            if (step == 10) printf("- Trying 1/10th frequencies..\n");
+            if (step == 1) printf("- Trying 1/100th frequencies..\n");
+            // if the freq is too low, we might fold with a higher one and
+            // delay every second frame. If the freq is too high, it'll be
+            // (more) impossible to play. Capping off at 100hz for now.
+            for (int freq = 2600; freq < 30000; freq += step)
             {
-                int wp = (wide[i * 2 + 0]) % (emuspeed / freq);
-                int bin = (wp * 32) / (emuspeed / freq);
-                bins |= 1 << bin;
+                // skip first 10% of regwrites
+                unsigned int bins = 0;
+                for (int i = regwrites / 10; i < regwrites; i++)
+                {
+                    int wp = (wide[i * 2 + 0]) % ((emuspeed * 100) / freq);
+                    int bin = (wp * 32) / ((emuspeed * 100) / freq);
+                    bins |= 1 << bin;
+                }
+                int bincount = 0;
+                for (int i = 0; i < 32; i++)
+                    if (bins & (1 << i))
+                        bincount++;
+                if (bincount < best_bins)
+                {
+                    best = freq;
+                    best_bins = bincount;
+                    frame_bins = bins;
+                }
             }
-            int bincount = 0;
-            for (int i = 0; i < 32; i++)
-                if (bins & (1 << i))
-                    bincount++;
-            if (bincount < best_bins)
-            {
-                best = freq;
-                best_bins = bincount;
-                frame_bins = bins;                
-            }
-        }
-        printf("- Frame frequency looks like %dhz (%d 1/32 bins)\n", best, best_bins);
+            step /= 10;
+        } while (step > 0 && best > 10000);
+        printf("- Frame frequency looks like %3.2fhz (%d 1/32 bins)\n", best / 100.0f, best_bins);
         frame_freq = best;
-        frame_count = wide[(regwrites - 1) * 2 + 0] / (emuspeed / frame_freq);
+        frame_count = wide[(regwrites - 1) * 2 + 0] / ((emuspeed *100) / frame_freq);
         printf("- Therefore, we have %d frames\n", frame_count);
     }
 
+    // this is really bad perf-wise if we go long, but
+    // fine for the first few frames..
     unsigned int find_frame_bins(int frame)
     {
-        unsigned int starttime = frame * (emuspeed / frame_freq);
-        unsigned int endtime = starttime + (emuspeed / frame_freq);
+        unsigned int starttime = frame * ((emuspeed * 100)/ frame_freq);
+        unsigned int endtime = starttime + ((emuspeed * 100) / frame_freq);
         unsigned int bins = 0;
         for (int i = 0; i < regwrites; i++)
         {
@@ -503,7 +514,7 @@ public:
                 && wide[i * 2 + 0] < endtime)
             {
                 int wp = (wide[i * 2 + 0] - starttime);
-                int bin = (wp * 32) / (emuspeed / frame_freq);
+                int bin = (wp * 32) / ((emuspeed * 100) / frame_freq);
                 bins |= 1 << bin;
             }
         }
@@ -512,30 +523,26 @@ public:
 
     void calculate_song_bins()
     {
-        int bins = 0;
         int framebin = 0;
-        int bin_groups = 0;
-        int frameno = 0;
+        unsigned int bincount[32];
+        for (int i = 0; i < 32; i++)
+            bincount[i] = 0;
+
+        unsigned int t = 0;
         for (int i = 0; i < regwrites; i++)
         {
             if (wide[i * 2 + 0] != 0)               // skip collapsed start writes
             {
-                int wp = wide[i * 2 + 0] % (emuspeed / frame_freq);
-                int bin = (wp * 32) / (emuspeed / frame_freq);
-                bins |= 1 << bin;
-                int frame = wide[i * 2 + 0] / (emuspeed / frame_freq);
-                if (frame != frameno)
-                    framebin = 0;
-                framebin |= 1 << bin;
-
-                int bg = 0;
-                for (int j = 1; j < 32; j++)
-                    if ((framebin & (1 << (j - 1))) && !(framebin & (1 << j)))
-                        bg++;
-                if (bin_groups < bg) bin_groups = bg;
+                int wp = wide[i * 2 + 0] % ((emuspeed * 100) / frame_freq);
+                int bin = (wp * 32) / ((emuspeed * 100) / frame_freq);
+                bincount[bin]++;
             }
         }
-        frame_bin_groups = bin_groups;
+        unsigned int bins = 0;
+        for (int i = 0; i < 32; i++)
+            if (bincount[i])
+                bins |= 1 << i;
+
         frame_bins = bins;
     }
 
@@ -559,7 +566,7 @@ public:
         {
             changed = 1;
             printf("- We seem to have %d init frame(s), collapsing..\n", last_initframe);
-            unsigned int endtime = last_initframe * (emuspeed / frame_freq);
+            unsigned int endtime = last_initframe * ((emuspeed * 100) / frame_freq);
             for (int i = 0; i < regwrites; i++)
             {
                 if (wide[i * 2 + 0] > endtime)
@@ -573,41 +580,6 @@ public:
         calculate_song_bins();
     }
 
-    void adjust_framestart()
-    {
-        int offset = 0;
-        if ((frame_bins & 1) && (frame_bins & (1 << 31)))
-        {
-            // Reg writes span across frames, need to move later
-            // to start the writes at the start of the frame
-            for (int i = 0; i < 10; i++)
-                if (frame_bins & (1 << (31 - i)))
-                    offset = i + 1;
-        }
-        else
-        {
-            // or maybe we need to move a bit earlier?
-            for (int i = 0; i < 10; i++)
-                if ((frame_bins & (1 << i)) == 0)
-                    offset = -i;
-                else break;
-        }
-        
-        if (offset)
-        {
-            printf("- Adjusting frame start by %d 1/32ths\n", offset);
-            offset = offset * (emuspeed / (frame_freq * 32));
-            for (int i = 0; i < regwrites; i++)
-            {
-                if (wide[i * 2 + 0] > 0)
-                    wide[i * 2 + 0] += offset;
-            }
-            // recalculate bins after offsetting
-            calculate_song_bins();
-            changed = 1;
-        }
-    }
-
     void remove_empty_frames()
     {
         int count = 0;
@@ -615,7 +587,7 @@ public:
         if (count > 0)
         {
             printf("- Found %d initial empty frames, removing..\n", count);
-            int offset = count * (emuspeed / frame_freq);
+            int offset = count * ((emuspeed * 100) / frame_freq);
             for (int i = 0; i < regwrites; i++)
             {
                 if (wide[i * 2 + 0] > 0)
@@ -625,26 +597,9 @@ public:
         changed = 1;
     }
 
-    void find_trigger_speed()
-    {        
-        if ((frame_bins & 0b11111111111111110000000000000000) == 0) { frame_triggers = 1; } else
-        if ((frame_bins & 0b11111111000000001111111100000000) == 0) { frame_triggers = 2; } else
-        if ((frame_bins & 0b11110000111100001111000011110000) == 0) { frame_triggers = 4; } else
-        if ((frame_bins & 0b11001100110011001100110011001100) == 0) { frame_triggers = 8; } else
-        if ((frame_bins & 0b10101010101010101010101010101010) == 0) { frame_triggers = 16; }
-        else
-        {
-            printf("- Unable to figure out frame trigger frequency.");
-            exit(-1);
-        }
-        if (frame_bin_groups == 1)
-            frame_triggers = 1;
-        printf("- Song seems to trigger %d times per frame.\n", frame_triggers);
-    }
-
     void reduce_emuspeed()
     {
-        int target_rate = frame_freq * frame_triggers;
+        int target_rate = frame_freq / 100 + ((frame_freq % 100 >= 50)? 1 : 0);
         int divisor = emuspeed / target_rate;
 
         if (divisor != 1)
@@ -871,10 +826,6 @@ int main(int parc, char ** pars)
             zak.find_frame_freq();
             // handle first frame(s)
             zak.collapse_start();
-            // find frame start
-            zak.adjust_framestart();
-            // find triggers per second
-            zak.find_trigger_speed();
             // change emuspeed
             zak.reduce_emuspeed();
         }
