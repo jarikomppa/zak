@@ -331,8 +331,6 @@ public:
         }
 
         printf("- Compressing\n");
-        flags = flags & ~(1); // remove uncompressed flag
-        *(unsigned char*)(header + 11) = flags;
 
 		// skip compression if nothing changed
 		if (orig_compressed)
@@ -344,12 +342,10 @@ public:
 			return;
 		}
 
-        changed = 1;
-
         Optimal* o;
         unsigned char* cd = 0;
         unsigned char* ob = new unsigned char[kchunks * 2048]; // should be enough in all cases
-        datasize = 0;
+        int newdatasize = 0;
         size_t sz;
         long dt;
         int i;
@@ -375,12 +371,22 @@ public:
             }
             if (debug) printf(" %d bytes\n", (int)sz);
             memcpy(ob + datasize, cd, sz);
-            datasize += sz;
+            newdatasize += sz;
             free(o);
             free(cd);
         }
+        if (datasize <= newdatasize)
+        {
+            printf("\r- Data did not compress, saving as uncompressed\n");
+            delete[] ob;
+            return;
+        }
+        datasize = newdatasize;
         delete[] data;
         data = ob;
+        changed = 1;
+        flags = flags & ~(1); // remove uncompressed flag
+        *(unsigned char*)(header + 11) = flags;
     }
 
 
@@ -456,12 +462,24 @@ public:
     {
         // Find frame frequency by binning reg writes and 
         // picking the frequency which uses least bins.
-        int best = 45;
-        int best_bins = 21;
+        int best = 50000;
+        int best_bins = 32;
         int step = 100;
+
+        // special case: if everything is in the first frame, assume 50hz
+        if (wide[(regwrites - 1) * 2] < (unsigned int)(emuspeed / 50))
+        {
+            printf("- Single-frame song, setting as 50hz\n");
+            frame_freq = 5000;
+            frame_count = 1;
+            frame_bins = 1;
+            return;
+        }
 
         do
         {
+            best = 50000;
+            best_bins = 32;
             if (step == 10) printf("- Trying 1/10th frequencies..\n");
             if (step == 1) printf("- Trying 1/100th frequencies..\n");
             // if the freq is too low, we might fold with a higher one and
@@ -491,6 +509,11 @@ public:
             step /= 10;
         } while (step > 0 && best > 10000);
         printf("- Frame frequency looks like %3.2fhz (%d 1/32 bins)\n", best / 100.0f, best_bins);
+        if (best_bins == 32)
+        {
+            printf("- Unable to find a sane frequency\n");
+            exit(-1);
+        }
         frame_freq = best;
         frame_count = wide[(regwrites - 1) * 2 + 0] / ((emuspeed *100) / frame_freq);
         printf("- Therefore, we have %d frames\n", frame_count);
@@ -833,20 +856,7 @@ int main(int parc, char ** pars)
         zak.remove_empty_frames();
         // eliminate shadowed and unchanged writes
         zak.optimize();
-
-        /*
-		if (i != 1)
-		{
-			delete[] zak.orig_compressed;
-			zak.orig_compressed = 0;
-		}
-
-		if (((!compressed && !zak.orig_compressed) || (compressed && zak.orig_compressed)) && _stricmp(infilename, outfilename) == 0)
-		{
-			printf("- No changes, input and output are the same, not saving.\n");
-			return 0;
-		}
-        */
+        
         zak.convert_from_wide();
 	}
 
@@ -858,6 +868,12 @@ int main(int parc, char ** pars)
 
     if (compressed)
         zak.compress();
+
+    if (!zak.changed && _stricmp(infilename, outfilename) == 0)
+    {
+        printf("- No changes, input and output are the same, not saving.\n");
+        return 0;
+    }
 
     zak.save(outfilename);
 
