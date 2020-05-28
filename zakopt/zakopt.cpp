@@ -5,6 +5,8 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
+#define NUKE_FROM_ORBIT 0x10000
+
 extern "C"
 {
 #include "zx7.h"
@@ -33,38 +35,8 @@ char * loadFile(const char *fn, int &len)
     return b;    
 }
 
-unsigned short* outbuf = 0;
-int outbuf_idx = 0;
 int debug = 0;
 int force_50hz = 0;
-
-void write_short(unsigned short v)
-{
-    outbuf[outbuf_idx] = v;
-    outbuf_idx++;
-}
-
-int write_delay(int delay)
-{
-    int writes = 0;
-    while (delay >= 0x7fff * 2)
-    {
-        write_short(0x8000);
-        writes++;
-        delay -= 0x7fff * 2;
-    }
-    while (delay)
-    {
-        unsigned short d = 0x7fff;
-        if (delay < d)
-            d = delay;
-        delay -= d;
-        d |= 0x8000;
-        write_short(d);
-        writes++;
-    }
-    return writes;
-}
 
 void printPascalString(char* s)
 {
@@ -166,32 +138,51 @@ public:
 
     void convert_from_wide()
     {
+        delete[] data;
+        data = new unsigned char[regwrites * 16]; // should be big enough buffer..
         unsigned short* d = (unsigned short*)data;
+
         int pos = 0;
         totalsize = 0;
         for (int i = 0; i < regwrites; i++)
         {
-            while (wide[i * 2 + 0] - pos)
+            if (wide[i * 2 + 1] != NUKE_FROM_ORBIT)
             {
-                int t = wide[i * 2 + 0] - pos;
-                if (t > 0x7fff)
-                    t = 0x7fff;
-                *d = t | 0x8000;
+                while (wide[i * 2 + 0] - pos)
+                {
+                    int t = wide[i * 2 + 0] - pos;
+                    if (t > 0x7fff)
+                        t = 0x7fff;
+                    *d = t | 0x8000;
+                    d++;
+                    totalsize += 2;
+                    pos += t;
+                    if (loop_time < pos)
+                    {
+                        loopchunk = (totalsize) / 1024;
+                        loopbyte = (totalsize) % 1024;
+                        *(unsigned short*)(header + 16) = loopchunk;
+                        *(unsigned short*)(header + 18) = loopbyte;
+                    }
+                }
+                *d = wide[i * 2 + 1];
                 d++;
                 totalsize += 2;
-                pos += t;
-                if (loop_time < pos)
-                {
-                    loopchunk = (totalsize) / 1024;
-                    loopbyte = (totalsize) % 1024;
-                    *(unsigned short*)(header + 16) = loopchunk;
-                    *(unsigned short*)(header + 18) = loopbyte;
-                }
             }
-            *d = wide[i * 2 + 1];
+        }
+        lastchunk = totalsize & 1023;
+        // Fill last chunk with zeros
+        while (totalsize & 1023)
+        {
+            *d = 0;
             d++;
             totalsize += 2;
         }
+        // Calculate number of k-chunks
+        kchunks = totalsize / 1024;
+        *(unsigned short*)(header + 12) = kchunks;
+        *(unsigned short*)(header + 14) = lastchunk;
+        printf("- New 1k chunks:%d, last chunk:%d bytes\n", kchunks, lastchunk);
     }
 
     void print_info()
@@ -333,7 +324,7 @@ public:
         printf("- Compressing\n");
 
 		// skip compression if nothing changed
-		if (orig_compressed)
+		if (orig_compressed && !changed)
 		{
 			printf("- Nothing changed, so we'll use original compressed data.\n");
 			delete[] data;
@@ -370,7 +361,7 @@ public:
                 cd = ::compress(o, data + ((i - 1) * 1024), 1024 * 2, 1024, &sz, &dt);
             }
             if (debug) printf(" %d bytes\n", (int)sz);
-            memcpy(ob + datasize, cd, sz);
+            memcpy(ob + newdatasize, cd, sz);
             newdatasize += sz;
             free(o);
             free(cd);
@@ -485,7 +476,7 @@ public:
             // if the freq is too low, we might fold with a higher one and
             // delay every second frame. If the freq is too high, it'll be
             // (more) impossible to play. Capping off at 100hz for now.
-            for (int freq = 2600; freq < 30000; freq += step)
+            for (int freq = 2600; freq < 60000; freq += step)
             {
                 // skip first 10% of regwrites
                 unsigned int bins = 0;
@@ -504,10 +495,12 @@ public:
                     best = freq;
                     best_bins = bincount;
                     frame_bins = bins;
+                    if (bincount == 1)
+                        break;
                 }
             }
             step /= 10;
-        } while (step > 0 && best > 10000);
+        } while (step > 0 && (best > 10000 || best_bins > 16));
         printf("- Frame frequency looks like %3.2fhz (%d 1/32 bins)\n", best / 100.0f, best_bins);
         if (best_bins == 32)
         {
@@ -639,8 +632,6 @@ public:
         }
     }
 
-#define NUKE_FROM_ORBIT 0x10000
-
     void optimize()
     {        
         // find shadowed writes
@@ -708,6 +699,33 @@ public:
             regwrites = nregwrites;
             changed = 1;
         }
+    }
+
+    void verify()
+    {
+        int maxreg = 3 * 16;
+        unsigned int delayops = 0;
+        unsigned int delays = 0;
+        unsigned int regops = 0;
+        unsigned short* d = (unsigned short*)data;
+        for (int i = 0; i < totalsize / 2; i++)
+        {
+            if (*d & 0x8000)
+            {
+                delayops++;
+                delays += *d & 0x7fff;
+            }
+            else
+            {
+                regops++;
+                if ((*d >> 8) > maxreg)
+                {
+                    printf("borked ");
+                }
+            }
+            d++;
+        }
+        printf("- %d regwrites, %d delay ops, %d average delay\n", regops, delayops, delays / delayops);
     }
 };
 
@@ -857,6 +875,7 @@ int main(int parc, char ** pars)
         // eliminate shadowed and unchanged writes
         zak.optimize();
         
+        // back to dump format
         zak.convert_from_wide();
 	}
 
@@ -865,6 +884,8 @@ int main(int parc, char ** pars)
         zak.draw_map();
         return 0;
     }
+
+    zak.verify();
 
     if (compressed)
         zak.compress();
